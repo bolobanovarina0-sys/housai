@@ -5,9 +5,9 @@ import urllib.parse
 import os
 import io
 
-PORT = int(os.environ.get("PORT", 8000))
+PORT = int(os.environ.get("PORT", 10000))
 
-# Встроенная SVG-схема квартиры для демонстрации (планировка с комнатами)
+# Встроенная SVG-схема квартиры для демонстрации
 FLOOR_PLAN_SVG = (
     "data:image/svg+xml;utf8,"
     "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>"
@@ -54,6 +54,17 @@ APARTMENTS_DB = {
 }
 
 class DigitalTwinHandler(http.server.SimpleHTTPRequestHandler):
+    def translate_path(self, path):
+        # Если запрашивают API, оставляем путь как есть
+        if path.startswith("/api/"):
+            return path
+        # Если запрашивают корень "/", отдаем index.html из папки static
+        if path == "/" or path == "":
+            path = "/index.html"
+        # Все остальные запросы ищем внутри папки static
+        base_dir = os.path.join(os.getcwd(), "static")
+        return os.path.join(base_dir, path.lstrip("/"))
+
     def do_GET(self):
         parsed_path = urllib.parse.urlparse(self.path)
         path = parsed_path.path
@@ -113,10 +124,10 @@ class DigitalTwinHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(mem.read())
             return
 
-        # Обслуживание статических файлов из текущей директории
+        # Обслуживание статических файлов
         return super().do_GET()
 
 if __name__ == "__main__":
     with socketserver.TCPServer(("0.0.0.0", PORT), DigitalTwinHandler) as httpd:
-        print(f"Сервер цифрового двойника запущен! Откройте в браузере: http://localhost:{PORT}")
+        print(f"Сервер цифрового двойника запущен на порту {PORT}")
         httpd.serve_forever()
