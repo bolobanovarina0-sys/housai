@@ -1,38 +1,39 @@
-import http.server
-import socketserver
-import json
-import urllib.parse
 import os
 import io
+import json
+from flask import Flask, jsonify, request, send_from_directory, send_file
 
-PORT = int(os.environ.get("PORT", 10000))
+# Определяем текущую папку, где лежит main.py
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Встроенная SVG-схема квартиры для демонстрации
+app = Flask(__name__)
+
+# Встроенная SVG-схема квартиры
 FLOOR_PLAN_SVG = (
     "data:image/svg+xml;utf8,"
     "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>"
-    "<rect width='100' height='100' fill='%23f1f5f9'/>"
-    "<rect x='10' y='10' width='80' height='80' fill='none' stroke='%2394a3b8' stroke-width='2'/>"
-    "<line x1='50' y1='10' x2='50' y2='90' stroke='%2394a3b8' stroke-width='2'/>"
-    "<line x1='10' y1='50' x2='90' y2='50' stroke='%2394a3b8' stroke-width='2'/>"
-    "<text x='25' y='30' font-family='sans-serif' font-size='6' fill='%2364748b' text-anchor='middle'>Гостиная</text>"
-    "<text x='75' y='30' font-family='sans-serif' font-size='6' fill='%2364748b' text-anchor='middle'>Кухня</text>"
-    "<text x='25' y='75' font-family='sans-serif' font-size='6' fill='%2364748b' text-anchor='middle'>Спальня</text>"
-    "<text x='75' y='75' font-family='sans-serif' font-size='6' fill='%2364748b' text-anchor='middle'>Санузел</text>"
+    "<rect width='100' height='100' fill='%231e293b'/>"
+    "<rect x='10' y='10' width='80' height='80' fill='none' stroke='%2338bdf8' stroke-width='1.5'/>"
+    "<line x1='50' y1='10' x2='50' y2='90' stroke='%2338bdf8' stroke-width='1.5'/>"
+    "<line x1='10' y1='50' x2='90' y2='50' stroke='%2338bdf8' stroke-width='1.5'/>"
+    "<text x='25' y='30' font-family='sans-serif' font-size='6' fill='%2394a3b8' text-anchor='middle'>Гостиная</text>"
+    "<text x='75' y='30' font-family='sans-serif' font-size='6' fill='%2394a3b8' text-anchor='middle'>Кухня</text>"
+    "<text x='25' y='75' font-family='sans-serif' font-size='6' fill='%2394a3b8' text-anchor='middle'>Спальня</text>"
+    "<text x='75' y='75' font-family='sans-serif' font-size='6' fill='%2394a3b8' text-anchor='middle'>Санузел</text>"
     "</svg>"
 )
 
-# База данных цифровых двойников квартир (модуль «Цифровая трансформация дома»)
+# База данных квартир
 APARTMENTS_DB = {
     "101": {
         "apartment_id": "101",
         "plan_url": FLOOR_PLAN_SVG,
         "sensors": [
-            {"id": "s1", "name": "Температура (Гостиная)", "type": "temperature", "x": 25, "y": 30, "value": 22.4, "unit": "°C"},
-            {"id": "s2", "name": "Влажность (Кухня)", "type": "humidity", "x": 75, "y": 30, "value": 48, "unit": "%"},
-            {"id": "s3", "name": "Контроль протечки (Санузел)", "type": "leak", "x": 75, "y": 75, "value": "Норма", "unit": ""},
-            {"id": "s4", "name": "Детектор дыма (Спальня)", "type": "smoke", "x": 25, "y": 75, "value": "ОК", "unit": ""},
-            {"id": "s5", "name": "Счетчик ХВС", "type": "meter", "x": 75, "y": 80, "value": 112.4, "unit": "м³"}
+            {"id": "s1", "name": "Температура", "type": "temperature", "x": 25, "y": 30, "value": 22.4, "unit": "°C"},
+            {"id": "s2", "name": "Влажность", "type": "humidity", "x": 75, "y": 30, "value": 48, "unit": "%"},
+            {"id": "s3", "name": "Протечка", "type": "leak", "x": 75, "y": 75, "value": "Норма", "unit": ""},
+            {"id": "s4", "name": "Дым", "type": "smoke", "x": 25, "y": 75, "value": "ОК", "unit": ""},
+            {"id": "s5", "name": "Энергия", "type": "meter", "x": 75, "y": 80, "value": 112, "unit": "кВт"}
         ],
         "forecast": {
             "labels": ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"],
@@ -43,8 +44,8 @@ APARTMENTS_DB = {
         "apartment_id": "102",
         "plan_url": FLOOR_PLAN_SVG,
         "sensors": [
-            {"id": "s10", "name": "Температура (Спальня)", "type": "temperature", "x": 25, "y": 75, "value": 20.1, "unit": "°C"},
-            {"id": "s11", "name": "Контроль протечки (Кухня)", "type": "leak", "x": 75, "y": 30, "value": "АЛАРМ", "unit": "!"}
+            {"id": "s10", "name": "Температура", "type": "temperature", "x": 25, "y": 75, "value": 20.1, "unit": "°C"},
+            {"id": "s11", "name": "Протечка", "type": "leak", "x": 75, "y": 30, "value": "АЛАРМ", "unit": "!"}
         ],
         "forecast": {
             "labels": ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"],
@@ -53,81 +54,64 @@ APARTMENTS_DB = {
     }
 }
 
-class DigitalTwinHandler(http.server.SimpleHTTPRequestHandler):
-    def translate_path(self, path):
-        # Если запрашивают API, оставляем путь как есть
-        if path.startswith("/api/"):
-            return path
-        # Если запрашивают корень "/", отдаем index.html из папки static
-        if path == "/" or path == "":
-            path = "/index.html"
-        # Все остальные запросы ищем внутри папки static
-        base_dir = os.path.join(os.getcwd(), "static")
-        return os.path.join(base_dir, path.lstrip("/"))
+# --- МАРШРУТИЗАЦИЯ ФАЙЛОВ ИНТЕРФЕЙСА ---
 
-    def do_GET(self):
-        parsed_path = urllib.parse.urlparse(self.path)
-        path = parsed_path.path
+@app.route('/')
+def serve_index():
+    """Отдает главную страницу сайта"""
+    return send_from_directory(BASE_DIR, 'index.html')
 
-        # Эндпоинт получения данных квартиры по ID
-        if path == "/api/apartment":
-            query = urllib.parse.parse_qs(parsed_path.query)
-            apt_id = query.get("id", [""])[0]
-            
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
-            
-            if not apt_id:
-                self.wfile.write(json.dumps({"error": "Параметр 'id' обязателен"}, ensure_ascii=False).encode("utf-8"))
-            elif apt_id not in APARTMENTS_DB:
-                self.wfile.write(json.dumps({"error": f"Квартира с ID {apt_id} не найдена"}, ensure_ascii=False).encode("utf-8"))
-            else:
-                self.wfile.write(json.dumps(APARTMENTS_DB[apt_id], ensure_ascii=False).encode("utf-8"))
-            return
+@app.route('/<path:filename>')
+def serve_static(filename):
+    """Отдает css, js и картинки из той же папки"""
+    return send_from_directory(BASE_DIR, filename)
 
-        # Эндпоинт генерации и скачивания отчета
-        elif path == "/api/apartment/report":
-            query = urllib.parse.parse_qs(parsed_path.query)
-            apt_id = query.get("id", [""])[0]
-            if not apt_id or apt_id not in APARTMENTS_DB:
-                self.send_response(400)
-                self.end_headers()
-                return
+# --- API ДЛЯ ЦИФРОВОГО ДВОЙНИКА ---
 
-            apt_data = APARTMENTS_DB[apt_id]
-            report_lines = [
-                "=== ОТЧЕТ ЦИФРОВОГО ДВОЙНИКА КВАРТИРЫ ===",
-                f"Объект: Квартира №{apt_id}",
-                "Проект: Всероссийский конкурс «Молодые строители России»",
-                "Номинация: Цифровая трансформация дома",
-                "-" * 45,
-                "ТЕЛЕМЕТРИЯ ДАТЧИКОВ:",
-            ]
-            for s in apt_data['sensors']:
-                report_lines.append(f" • {s['name']}: {s['value']} {s['unit']}")
-            
-            total_cost = sum(apt_data['forecast']['values'])
-            report_lines.append("-" * 45)
-            report_lines.append(f"Прогнозируемый расход ресурсов на неделю: {total_cost} ₽")
-            report_lines.append("Статус энергоэффективности: Класс A+ (Оптимизировано)")
+@app.route('/api/apartment', methods=['GET'])
+def api_apartment():
+    apt_id = request.args.get('id', '')
+    if not apt_id:
+        return jsonify({"error": "Введите ID квартиры"}), 400
+    if apt_id not in APARTMENTS_DB:
+        return jsonify({"error": f"Квартира №{apt_id} не найдена (попробуйте 101)"}), 404
+    
+    return jsonify(APARTMENTS_DB[apt_id])
 
-            content = "\n".join(report_lines)
-            mem = io.BytesIO()
-            mem.write(content.encode('utf-8'))
-            mem.seek(0)
+@app.route('/api/apartment/report', methods=['GET'])
+def api_report():
+    apt_id = request.args.get('id', '')
+    if not apt_id or apt_id not in APARTMENTS_DB:
+        return jsonify({"error": "Неверный ID"}), 400
 
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.send_header("Content-Disposition", f"attachment; filename=report_apartment_{apt_id}.txt")
-            self.end_headers()
-            self.wfile.write(mem.read())
-            return
+    apt_data = APARTMENTS_DB[apt_id]
+    
+    lines = [
+        "=== ОТЧЕТ ЦИФРОВОГО ДВОЙНИКА ===",
+        f"Объект: Квартира №{apt_id}",
+        "Проект: Конкурс «Молодые строители России»",
+        "-" * 30,
+        "ДАТЧИКИ ТЕЛЕМЕТРИИ:"
+    ]
+    for s in apt_data['sensors']:
+        lines.append(f" - {s['name']}: {s['value']} {s['unit']}")
+    
+    total = sum(apt_data['forecast']['values'])
+    lines.append("-" * 30)
+    lines.append(f"Прогноз расходов: {total} ₽")
+    lines.append("Энергоэффективность: A+ (Оптимально)")
 
-        # Обслуживание статических файлов
-        return super().do_GET()
+    mem = io.BytesIO()
+    mem.write("\n".join(lines).encode('utf-8'))
+    mem.seek(0)
+    
+    return send_file(
+        mem,
+        mimetype='text/plain',
+        as_attachment=True,
+        download_name=f"report_apt_{apt_id}.txt"
+    )
 
-if __name__ == "__main__":
-    with socketserver.TCPServer(("0.0.0.0", PORT), DigitalTwinHandler) as httpd:
-        print(f"Сервер цифрового двойника запущен на порту {PORT}")
-        httpd.serve_forever()
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port, debug=True)
