@@ -1,1 +1,1 @@
-# Нет внешних зависимостей (используется стандартная библиотека Python http.server)
+pip install -r requirements.txt.
